@@ -7,12 +7,10 @@ st.set_page_config(page_title="Analisis Stock Dashboard", layout="wide")
 st.title("📦 Dashboard Analisis Stock")
 st.markdown("Upload file Excel yang berisi sheet `SO_B2B` dan `Loct_F211`.")
 
-# --- FUNGSI CACHING (Supaya Tidak Lemot) ---
+# --- FUNGSI CACHING ---
 @st.cache_data
 def load_data(file):
-    """Fungsi ini hanya akan jalan sekali saat file diupload."""
     xls = pd.ExcelFile(file)
-    # Cek sheet
     required_sheets = ['SO_B2B', 'Loct_F211']
     missing_sheets = [s for s in required_sheets if s not in xls.sheet_names]
     
@@ -30,12 +28,11 @@ def clean_number(x):
         x = x.replace(',', '') 
     return pd.to_numeric(x, errors='coerce')
 
-# --- Bagian Upload File ---
+# --- MAIN APP ---
 st.sidebar.header("Upload File")
 uploaded_file = st.sidebar.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
 
 if uploaded_file:
-    # Panggil fungsi load_data dengan caching
     df_so, df_loct, error_msg = load_data(uploaded_file)
     
     if error_msg:
@@ -43,27 +40,26 @@ if uploaded_file:
     elif df_so is not None and df_loct is not None:
         try:
             # --- PREPROCESSING ---
-            # Pastikan tipe data konsisten (String untuk Material biar bisa dicocokkan)
             df_so['Material'] = df_so['Material'].astype(str)
             df_loct['Material'] = df_loct['Material'].astype(str)
-
-            # Bersihkan angka
+            
+            # Cleaning Data
             if df_so['Ordered Quantity'].dtype == 'object':
                 df_so['Ordered Quantity'] = df_so['Ordered Quantity'].apply(clean_number)
             
             if df_loct['Unrestricted'].dtype == 'object':
                 df_loct['Unrestricted'] = df_loct['Unrestricted'].apply(clean_number)
 
-            # --- MEMBUAT TABS ---
-            tab1, tab2 = st.tabs(["🚨 Analisis Defisit", "🔍 Cek Stock Gudang"])
+            # --- TABS ---
+            tab1, tab2 = st.tabs(["🚨 Analisis Defisit", "🔍 Cek Stock & Alokasi"])
 
             # =========================================
             # TAB 1: HASIL ANALISIS DEFISIT
             # =========================================
             with tab1:
-                st.subheader("Analisis Batch Defisit & Shipment Terdampak")
+                st.subheader("Analisis Batch Defisit")
                 
-                # Agregasi Data SO
+                # Grouping SO
                 so_agg = df_so.groupby(['Material', 'Batch Number']).agg({
                     'Ordered Quantity': 'sum',
                     'Shipment Number': lambda x: ', '.join(x.astype(str).unique()) 
@@ -75,7 +71,7 @@ if uploaded_file:
                     'Shipment Number': 'List_Shipment_Numbers'
                 }, inplace=True)
                 
-                # Agregasi Data Stock
+                # Grouping Stock
                 loct_agg = df_loct.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
                 loct_agg.rename(columns={'Unrestricted': 'Stock_Onhand'}, inplace=True)
                 
@@ -91,69 +87,77 @@ if uploaded_file:
                     st.error(f"Ditemukan {len(deficit_df)} Batch SKU yang defisit!")
                     
                     cols = ['Material', 'Batch', 'Total_Ordered', 'Stock_Onhand', 'Balance', 'List_Shipment_Numbers']
-                    deficit_df = deficit_df[cols]
+                    st.dataframe(deficit_df[cols].style.format({
+                        "Total_Ordered": "{:,.0f}", 
+                        "Stock_Onhand": "{:,.0f}", 
+                        "Balance": "{:,.0f}"
+                    }), use_container_width=True)
                     
+                    csv_defisit = deficit_df.to_csv(index=False).encode('utf-8')
+                    st.download_button("Download Data Defisit (CSV)", csv_defisit, "defisit_stock.csv", "text/csv")
+                else:
+                    st.success("Aman! Tidak ada defisit stock.")
+
+            # =========================================
+            # TAB 2: CEK DETAIL STOCK & SO (Updated)
+            # =========================================
+            with tab2:
+                st.subheader("Cek Ketersediaan & Alokasi Stock")
+                st.markdown("Pilih SKU untuk melihat perbandingan **Stock Gudang** vs **Order SO** per Batch.")
+                
+                all_materials = sorted(df_loct['Material'].unique())
+                selected_material = st.selectbox("Pilih Material / SKU:", all_materials)
+                
+                if selected_material:
+                    # 1. Siapkan Data Stock (Gudang) untuk Material ini
+                    loct_subset = df_loct[df_loct['Material'] == selected_material]
+                    # Group by Batch (antisipasi jika ada double row per batch di file asli)
+                    loct_grouped = loct_subset.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
+                    loct_grouped.rename(columns={'Unrestricted': 'Stock_Gudang'}, inplace=True)
+                    
+                    # 2. Siapkan Data Order (SO) untuk Material ini
+                    so_subset = df_so[df_so['Material'] == selected_material]
+                    so_grouped = so_subset.groupby(['Material', 'Batch Number'])['Ordered Quantity'].sum().reset_index()
+                    so_grouped.rename(columns={'Batch Number': 'Batch', 'Ordered Quantity': 'Qty_SO'}, inplace=True)
+                    
+                    # 3. Gabungkan (Left Join ke Stock Gudang)
+                    # Kita pakai Left Join ke Loct karena tujuannya mau liat "Stock yg tersedia"
+                    final_view = pd.merge(loct_grouped, so_grouped, on=['Material', 'Batch'], how='left')
+                    
+                    # Isi NaN dengan 0 (karena ada stock tapi gak ada order)
+                    final_view['Qty_SO'] = final_view['Qty_SO'].fillna(0)
+                    
+                    # Hitung Sisa Stock (Balance)
+                    final_view['Sisa_Stock'] = final_view['Stock_Gudang'] - final_view['Qty_SO']
+                    
+                    # Summary Cards
+                    tot_stock = final_view['Stock_Gudang'].sum()
+                    tot_so = final_view['Qty_SO'].sum()
+                    global_bal = tot_stock - tot_so
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total Stock (Gudang)", f"{tot_stock:,.0f}")
+                    col2.metric("Total Order (SO)", f"{tot_so:,.0f}")
+                    col3.metric("Global Balance", f"{global_bal:,.0f}", delta_color="normal")
+                    
+                    st.divider()
+                    st.write(f"**Detail Alokasi Batch untuk {selected_material}:**")
+                    
+                    # Tampilkan Tabel
+                    # Kolom: Material, Batch, Stock Gudang, Qty SO, Sisa Stock
                     st.dataframe(
-                        deficit_df.style.format({
-                            "Total_Ordered": "{:,.0f}", 
-                            "Stock_Onhand": "{:,.0f}", 
-                            "Balance": "{:,.0f}"
+                        final_view.style.format({
+                            "Stock_Gudang": "{:,.0f}", 
+                            "Qty_SO": "{:,.0f}", 
+                            "Sisa_Stock": "{:,.0f}"
                         }), 
                         use_container_width=True
                     )
                     
-                    csv_defisit = deficit_df.to_csv(index=False).encode('utf-8')
-                    st.download_button("Download Data Defisit (CSV)", csv_defisit, "analisis_defisit.csv", "text/csv")
-                else:
-                    st.success("Aman! Tidak ada defisit stock pada batch yang diminta.")
-
-            # =========================================
-            # TAB 2: FILTER STOCK GUDANG (OPTIMIZED)
-            # =========================================
-            with tab2:
-                st.subheader("Cek Detail Stock per SKU")
-                
-                # Ambil list unik Material (di-cache otomatis oleh Streamlit karena df_loct dari cache)
-                all_materials = sorted(df_loct['Material'].unique())
-                
-                # Dropdown
-                selected_material = st.selectbox("Pilih Material / SKU:", all_materials)
-                
-                if selected_material:
-                    # 1. Hitung Total Stock di Gudang (Loct)
-                    stock_filter = df_loct[df_loct['Material'] == selected_material]
-                    total_stock_qty = stock_filter['Unrestricted'].sum()
-                    
-                    # 2. Hitung Total Order di SO (Request User)
-                    so_filter = df_so[df_so['Material'] == selected_material]
-                    total_so_qty = so_filter['Ordered Quantity'].sum()
-                    
-                    # Tampilkan Summary Cards (Metrik)
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Total Order (SO)", f"{total_so_qty:,.0f}", help="Total yang diminta di sheet SO_B2B")
-                    col2.metric("Total Stock (Gudang)", f"{total_stock_qty:,.0f}", help="Total yang ada di sheet Loct_F211")
-                    
-                    # Indikator warna Balance
-                    balance_global = total_stock_qty - total_so_qty
-                    col3.metric("Global Balance", f"{balance_global:,.0f}", delta_color="normal")
-
-                    st.divider()
-                    
-                    # Tampilkan Tabel Batch Stock
-                    st.write(f"**Detail Batch Stock Gudang untuk {selected_material}:**")
-                    
-                    stock_display = stock_filter.groupby(['Batch'])['Unrestricted'].sum().reset_index()
-                    
-                    if not stock_display.empty:
-                        st.dataframe(
-                            stock_display.style.format({"Unrestricted": "{:,.0f}"}), 
-                            use_container_width=True
-                        )
-                    else:
-                        st.warning("Material ini tidak ditemukan di list Stock Gudang (Loct_F211).")
+                    st.caption("Catatan: Tabel di atas menampilkan batch yang **fisiknya ada di gudang** (Loct_F211).")
 
         except Exception as e:
-            st.error(f"Terjadi kesalahan logika: {e}")
+            st.error(f"Terjadi kesalahan: {e}")
 
 else:
     st.info("Silakan upload file Excel di sidebar.")
