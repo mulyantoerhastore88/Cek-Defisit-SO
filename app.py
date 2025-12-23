@@ -3,9 +3,9 @@ import pandas as pd
 import io
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="Analisis Stock Dashboard", layout="wide")
+st.set_page_config(page_title="Dashboard Analisis Defisit Stock SO - Mulyanto Demand Planner", layout="wide")
 
-st.title("📦 Dashboard Analisis Stock")
+st.title("📦 Dashboard Analisis Defisit Stock SO - Mulyanto Demand Planner ")
 st.markdown("Upload file Excel yang berisi sheet `SO_B2B` dan `Loct_F211`.")
 
 # --- FUNGSI CACHING ---
