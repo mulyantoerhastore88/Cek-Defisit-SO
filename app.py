@@ -6,129 +6,127 @@ st.set_page_config(page_title="Analisis Defisit Stock", layout="wide")
 
 st.title("📦 Dashboard Analisis Defisit Stock")
 st.markdown("""
-Aplikasi ini membandingkan data **Order (SO_B2B)** dengan **Stock Gudang (Loct_F211)** untuk menemukan Batch yang defisit.
-**Update:** Menampilkan List Shipment Number yang terdampak.
+Aplikasi ini membandingkan data **Order** dengan **Stock Gudang** dari satu file Excel.
+Pastikan file Excel memiliki sheet: `SO_B2B` dan `Loct_F211`.
 """)
 
 # --- Bagian Upload File ---
 st.sidebar.header("Upload File")
-file_so = st.sidebar.file_uploader("Upload SO_B2B (CSV)", type=['csv'])
-file_loct = st.sidebar.file_uploader("Upload Loct_F211 (CSV)", type=['csv'])
-file_sap = st.sidebar.file_uploader("Upload Sap Code (CSV) - Opsional", type=['csv'])
+uploaded_file = st.sidebar.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
 
-# Fungsi untuk membersihkan format angka
+# Fungsi untuk membersihkan format angka (handle string dengan koma atau angka murni)
 def clean_number(x):
     if isinstance(x, str):
         x = x.replace(',', '') 
     return pd.to_numeric(x, errors='coerce')
 
-if file_so and file_loct:
+if uploaded_file:
     try:
-        # 1. Load Data
-        df_so = pd.read_csv(file_so)
-        df_loct = pd.read_csv(file_loct)
+        # Membaca file Excel
+        xls = pd.ExcelFile(uploaded_file)
         
-        # Mapping Nama Produk (Optional)
-        product_map = {}
-        if file_sap:
-            df_sap = pd.read_csv(file_sap)
-            sap_cols = df_sap.columns.tolist()
-            # Logika mapping sku sap ke deskripsi
-            if 'SKU SAP' in sap_cols and 'Product Description' in sap_cols:
-                 product_map = dict(zip(df_sap['SKU SAP'], df_sap['Product Description']))
+        # Cek ketersediaan sheet
+        required_sheets = ['SO_B2B', 'Loct_F211']
+        missing_sheets = [s for s in required_sheets if s not in xls.sheet_names]
         
-        # 2. Preprocessing Data SO (Permintaan)
-        df_so['Ordered Quantity'] = df_so['Ordered Quantity'].apply(clean_number)
-        
-        # --- LOGIKA BARU DI SINI ---
-        # Group by Material & Batch:
-        # - Sum Ordered Quantity
-        # - List unik Shipment Number
-        so_agg = df_so.groupby(['Material', 'Batch Number']).agg({
-            'Ordered Quantity': 'sum',
-            'Shipment Number': lambda x: ', '.join(x.astype(str).unique()) # Gabungkan nomor shipment
-        }).reset_index()
-        
-        so_agg.rename(columns={
-            'Batch Number': 'Batch', 
-            'Ordered Quantity': 'Total_Ordered',
-            'Shipment Number': 'List_Shipment_Numbers' # Nama kolom baru
-        }, inplace=True)
-        
-        # 3. Preprocessing Data Stock (Persediaan)
-        df_loct['Unrestricted'] = df_loct['Unrestricted'].apply(clean_number)
-        
-        loct_agg = df_loct.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
-        loct_agg.rename(columns={'Unrestricted': 'Stock_Onhand'}, inplace=True)
-        
-        # 4. Analisis Defisit (Merge Data)
-        merged_df = pd.merge(so_agg, loct_agg, on=['Material', 'Batch'], how='left')
-        
-        # Isi NaN dengan 0 untuk stock yang tidak ditemukan
-        merged_df['Stock_Onhand'] = merged_df['Stock_Onhand'].fillna(0)
-        
-        # Hitung Selisih
-        merged_df['Balance'] = merged_df['Stock_Onhand'] - merged_df['Total_Ordered']
-        
-        # Filter Defisit
-        deficit_df = merged_df[merged_df['Balance'] < 0].copy()
-        
-        # Rapikan Kolom
-        if product_map:
-            deficit_df['Product Name'] = deficit_df['Material'].map(product_map)
-            # Urutan kolom dengan Product Name
-            cols = ['Material', 'Product Name', 'Batch', 'Total_Ordered', 'Stock_Onhand', 'Balance', 'List_Shipment_Numbers']
-            # Pastikan hanya mengambil kolom yang ada (jaga-jaga)
-            final_cols = [c for c in cols if c in deficit_df.columns]
-            deficit_df = deficit_df[final_cols]
+        if missing_sheets:
+            st.error(f"Sheet berikut tidak ditemukan dalam file Excel: {', '.join(missing_sheets)}")
         else:
-             # Urutan kolom tanpa Product Name
+            # 1. Load Data dari Sheet
+            df_so = pd.read_excel(uploaded_file, sheet_name='SO_B2B')
+            df_loct = pd.read_excel(uploaded_file, sheet_name='Loct_F211')
+            
+            # 2. Preprocessing Data SO (Permintaan)
+            # Bersihkan angka jika formatnya text, jika sudah number biarkan
+            if df_so['Ordered Quantity'].dtype == 'object':
+                df_so['Ordered Quantity'] = df_so['Ordered Quantity'].apply(clean_number)
+            
+            # --- LOGIKA UTAMA ---
+            # Group by Material & Batch Number:
+            # - Sum Ordered Quantity
+            # - Gabungkan List Shipment Number
+            so_agg = df_so.groupby(['Material', 'Batch Number']).agg({
+                'Ordered Quantity': 'sum',
+                'Shipment Number': lambda x: ', '.join(x.astype(str).unique()) 
+            }).reset_index()
+            
+            so_agg.rename(columns={
+                'Batch Number': 'Batch', 
+                'Ordered Quantity': 'Total_Ordered',
+                'Shipment Number': 'List_Shipment_Numbers'
+            }, inplace=True)
+            
+            # 3. Preprocessing Data Stock (Persediaan)
+            if df_loct['Unrestricted'].dtype == 'object':
+                df_loct['Unrestricted'] = df_loct['Unrestricted'].apply(clean_number)
+            
+            loct_agg = df_loct.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
+            loct_agg.rename(columns={'Unrestricted': 'Stock_Onhand'}, inplace=True)
+            
+            # 4. Analisis Defisit (Merge Data)
+            # Left join SO ke Stock
+            merged_df = pd.merge(so_agg, loct_agg, on=['Material', 'Batch'], how='left')
+            
+            # Isi NaN dengan 0 (artinya batch tidak ada di gudang sama sekali)
+            merged_df['Stock_Onhand'] = merged_df['Stock_Onhand'].fillna(0)
+            
+            # Hitung Balance
+            merged_df['Balance'] = merged_df['Stock_Onhand'] - merged_df['Total_Ordered']
+            
+            # Filter Defisit
+            deficit_df = merged_df[merged_df['Balance'] < 0].copy()
+            
+            # Rapikan urutan kolom
             cols = ['Material', 'Batch', 'Total_Ordered', 'Stock_Onhand', 'Balance', 'List_Shipment_Numbers']
             deficit_df = deficit_df[cols]
 
-        # --- TAMPILAN OUTPUT ---
-        st.subheader("🚨 Hasil Analisis: Batch yang Defisit & Shipment Terdampak")
-        
-        if not deficit_df.empty:
-            st.error(f"Ditemukan {len(deficit_df)} Batch SKU yang defisit!")
+            # --- TAMPILAN OUTPUT ---
+            st.subheader("🚨 Hasil Analisis: Batch yang Defisit & Shipment Terdampak")
             
-            # Tampilkan dataframe
-            st.dataframe(
-                deficit_df.style.format({
-                    "Total_Ordered": "{:,.0f}", 
-                    "Stock_Onhand": "{:,.0f}", 
-                    "Balance": "{:,.0f}"
-                }), 
-                use_container_width=True
-            )
-            
-            # Download Button
-            csv_defisit = deficit_df.to_csv(index=False).encode('utf-8')
-            st.download_button("Download Data Defisit (CSV)", csv_defisit, "defisit_stock_with_shipment.csv", "text/csv")
-            
-            # --- Tampilkan Stock Tersedia Lainnya ---
-            st.divider()
-            st.subheader("🔍 Stock Lain yang Tersedia (Untuk Substitusi)")
-            st.info("Tabel ini menampilkan SEMUA Batch yang tersedia di Gudang untuk Material yang defisit di atas.")
-            
-            deficit_materials = deficit_df['Material'].unique()
-            available_batches = df_loct[df_loct['Material'].isin(deficit_materials)].copy()
-            
-            available_display = available_batches.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
-            
-            if product_map:
-                available_display['Product Name'] = available_display['Material'].map(product_map)
-                cols = ['Material', 'Product Name', 'Batch', 'Unrestricted']
-                available_display = available_display[[c for c in cols if c in available_display.columns]]
-            
-            st.dataframe(available_display.style.format({"Unrestricted": "{:,.0f}"}), use_container_width=True)
-            
-        else:
-            st.success("Aman Bro! Tidak ada defisit stock.")
-            
+            if not deficit_df.empty:
+                st.error(f"Ditemukan {len(deficit_df)} Batch SKU yang defisit!")
+                
+                # Tampilkan tabel defisit
+                st.dataframe(
+                    deficit_df.style.format({
+                        "Total_Ordered": "{:,.0f}", 
+                        "Stock_Onhand": "{:,.0f}", 
+                        "Balance": "{:,.0f}"
+                    }), 
+                    use_container_width=True
+                )
+                
+                # Download Button
+                csv_defisit = deficit_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Data Defisit (CSV)", 
+                    data=csv_defisit, 
+                    file_name="defisit_stock_analysis.csv", 
+                    mime="text/csv"
+                )
+                
+                # --- Tampilkan Stock Tersedia Lainnya ---
+                st.divider()
+                st.subheader("🔍 Alternatif Stock Lain yang Tersedia")
+                st.info("Tabel ini menampilkan SEMUA Batch yang tersedia di Gudang untuk Material yang sedang defisit.")
+                
+                # Ambil list material yang bermasalah
+                deficit_materials = deficit_df['Material'].unique()
+                
+                # Filter data master gudang hanya untuk material tsb
+                available_batches = df_loct[df_loct['Material'].isin(deficit_materials)].copy()
+                
+                # Agregasi
+                available_display = available_batches.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
+                
+                st.dataframe(available_display.style.format({"Unrestricted": "{:,.0f}"}), use_container_width=True)
+                
+            else:
+                st.success("Mantap Bro! Tidak ada defisit stock untuk orderan ini.")
+                
     except Exception as e:
-        st.error(f"Terjadi kesalahan: {e}")
-        st.warning("Cek kembali nama kolom di file CSV. Pastikan ada 'Shipment Number' di file SO.")
+        st.error(f"Terjadi kesalahan saat memproses file: {e}")
+        st.warning("Pastikan file Excel tidak corrupt dan memiliki nama kolom yang sesuai.")
 
 else:
-    st.info("Silakan upload file SO_B2B dan Loct_F211.")
+    st.info("Silakan upload file Excel (.xlsx) di sidebar.")
