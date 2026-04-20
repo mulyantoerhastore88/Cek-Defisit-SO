@@ -75,12 +75,26 @@ if uploaded_file:
             if df_loct['Unrestricted'].dtype == 'object':
                 df_loct['Unrestricted'] = df_loct['Unrestricted'].apply(clean_number)
 
+            # Cek nama kolom Batch di df_so
+            if 'Batch Number' not in df_so.columns:
+                # Coba cari kolom yang mengandung kata 'batch'
+                batch_col = [col for col in df_so.columns if 'batch' in col.lower()]
+                if batch_col:
+                    batch_col_name = batch_col[0]
+                    df_so.rename(columns={batch_col_name: 'Batch Number'}, inplace=True)
+                else:
+                    st.error("Kolom 'Batch Number' tidak ditemukan di sheet SO_B2B")
+                    st.stop()
+
             # Buat dataframe detail dengan status stock
             # Gabungkan SO dengan Stock per Batch
             loct_batch = df_loct.groupby(['Material', 'Batch'])['Unrestricted'].sum().reset_index()
             loct_batch.rename(columns={'Unrestricted': 'Stock_Batch'}, inplace=True)
             
-            df_so_detail = df_so.merge(loct_batch, on=['Material', 'Batch Number'], how='left')
+            df_so_detail = df_so.merge(loct_batch, left_on=['Material', 'Batch Number'], right_on=['Material', 'Batch'], how='left')
+            df_so_detail.drop('Batch_y', axis=1, errors='ignore', inplace=True)
+            df_so_detail.rename(columns={'Batch_x': 'Batch Number'}, inplace=True, errors='ignore')
+            
             df_so_detail['Stock_Batch'] = df_so_detail['Stock_Batch'].fillna(0)
             df_so_detail['Balance_Per_Line'] = df_so_detail['Stock_Batch'] - df_so_detail['Ordered Quantity']
             
