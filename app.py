@@ -37,6 +37,16 @@ def to_excel(df_defisit, df_substitusi):
     processed_data = output.getvalue()
     return processed_data
 
+# --- FUNGSI COLOR CODING UNTUK STATUS ---
+def highlight_status(val):
+    if val == '❌ DEFISIT':
+        return 'background-color: #ffcccc'
+    elif val == '⚠️ PAS':
+        return 'background-color: #ffffcc'
+    elif val == '✅ SURPLUS':
+        return 'background-color: #ccffcc'
+    return ''
+
 # --- MAIN APP ---
 st.sidebar.header("Upload File")
 uploaded_file = st.sidebar.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
@@ -146,14 +156,18 @@ if uploaded_file:
                     # Tampilkan Preview (SEKARANG MENAMPILKAN SEMUA BATCH TERMASUK YANG NEGATIF)
                     with st.expander("📊 Lihat Preview Opsi Substitusi (Semua Batch Material Terkait)"):
                         st.caption("Tabel ini menampilkan semua batch dari material yang defisit. Gunakan untuk membandingkan batch defisit dengan batch surplus.")
-                        st.dataframe(substitusi_df.style.applymap(
-                            lambda x: 'background-color: #ffcccc' if x == '❌ DEFISIT' else ('background-color: #ffffcc' if x == '⚠️ PAS' else 'background-color: #ccffcc'),
+                        
+                        # Gunakan .map() untuk Styler (bukan .applymap())
+                        styled_df = substitusi_df.style.applymap(
+                            highlight_status, 
                             subset=['Status']
                         ).format({
                             "Stock_Gudang": "{:,.0f}",
                             "Qty_SO_Terpakai": "{:,.0f}",
                             "Sisa_Stock_Bisa_Pakai": "{:,.0f}"
-                        }), use_container_width=True)
+                        })
+                        
+                        st.dataframe(styled_df, use_container_width=True)
 
                     # --- STEP 3: Generate File Excel ---
                     # Export tetap menggunakan semua batch untuk sheet kedua
