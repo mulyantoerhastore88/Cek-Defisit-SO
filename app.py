@@ -99,7 +99,7 @@ if uploaded_file:
                         "Balance": "{:,.0f}"
                     }), use_container_width=True)
 
-                    # --- STEP 2: Siapkan Data Substitusi (Updated Logic) ---
+                    # --- STEP 2: Siapkan Data Substitusi (REVISI: Tampilkan Semua Batch) ---
                     # Ambil list material yang bermasalah
                     list_material_defisit = deficit_df['Material'].unique()
                     
@@ -113,26 +113,50 @@ if uploaded_file:
                     so_avail = so_subset.groupby(['Material', 'Batch Number'])['Ordered Quantity'].sum().reset_index()
                     so_avail.rename(columns={'Batch Number': 'Batch', 'Ordered Quantity': 'Qty_SO_Terpakai'}, inplace=True)
                     
-                    # 2c. Gabungkan (Left Join ke Stock Gudang)
-                    # Kenapa Left Join ke Stock? Karena kita mau cari barang yang ADA fisiknya buat subtitusi.
-                    substitusi_df = pd.merge(loct_avail, so_avail, on=['Material', 'Batch'], how='left')
+                    # 2c. Gabungkan (Gunakan OUTER JOIN agar batch tanpa stock atau tanpa SO tetap muncul)
+                    substitusi_df = pd.merge(loct_avail, so_avail, on=['Material', 'Batch'], how='outer')
+                    
+                    # Isi nilai NaN dengan 0
+                    substitusi_df['Stock_Gudang'] = substitusi_df['Stock_Gudang'].fillna(0)
                     substitusi_df['Qty_SO_Terpakai'] = substitusi_df['Qty_SO_Terpakai'].fillna(0)
                     
                     # 2d. Hitung Sisa Stock yang Beneran Free
                     substitusi_df['Sisa_Stock_Bisa_Pakai'] = substitusi_df['Stock_Gudang'] - substitusi_df['Qty_SO_Terpakai']
                     
-                    # Urutkan biar enak bacanya (Material dulu, lalu Sisa Stock terbesar di atas)
-                    substitusi_df = substitusi_df.sort_values(by=['Material', 'Sisa_Stock_Bisa_Pakai'], ascending=[True, False])
+                    # 2e. Tambahkan Kolom Status untuk memudahkan analisis
+                    def get_status(row):
+                        if row['Sisa_Stock_Bisa_Pakai'] < 0:
+                            return "❌ DEFISIT"
+                        elif row['Sisa_Stock_Bisa_Pakai'] == 0:
+                            return "⚠️ PAS"
+                        else:
+                            return "✅ SURPLUS"
+                    
+                    substitusi_df['Status'] = substitusi_df.apply(get_status, axis=1)
+                    
+                    # Urutkan: Material, lalu Status (Defisit dulu), lalu Sisa Stock (paling kecil/minus duluan)
+                    # Ini membantu planner melihat masalah terlebih dahulu
+                    status_order = {"❌ DEFISIT": 1, "⚠️ PAS": 2, "✅ SURPLUS": 3}
+                    substitusi_df['Sort_Status'] = substitusi_df['Status'].map(status_order)
+                    substitusi_df = substitusi_df.sort_values(
+                        by=['Material', 'Sort_Status', 'Sisa_Stock_Bisa_Pakai'], 
+                        ascending=[True, True, True]
+                    ).drop('Sort_Status', axis=1)
 
-                    # Tampilkan Preview
-                    with st.expander("Lihat Preview Opsi Substitusi (Batch dengan Stock Positif)"):
-                        st.dataframe(substitusi_df.style.format({
+                    # Tampilkan Preview (SEKARANG MENAMPILKAN SEMUA BATCH TERMASUK YANG NEGATIF)
+                    with st.expander("📊 Lihat Preview Opsi Substitusi (Semua Batch Material Terkait)"):
+                        st.caption("Tabel ini menampilkan semua batch dari material yang defisit. Gunakan untuk membandingkan batch defisit dengan batch surplus.")
+                        st.dataframe(substitusi_df.style.applymap(
+                            lambda x: 'background-color: #ffcccc' if x == '❌ DEFISIT' else ('background-color: #ffffcc' if x == '⚠️ PAS' else 'background-color: #ccffcc'),
+                            subset=['Status']
+                        ).format({
                             "Stock_Gudang": "{:,.0f}",
                             "Qty_SO_Terpakai": "{:,.0f}",
                             "Sisa_Stock_Bisa_Pakai": "{:,.0f}"
                         }), use_container_width=True)
 
                     # --- STEP 3: Generate File Excel ---
+                    # Export tetap menggunakan semua batch untuk sheet kedua
                     excel_data = to_excel(deficit_df_clean, substitusi_df)
                     
                     st.download_button(
@@ -164,7 +188,8 @@ if uploaded_file:
                     so_grouped = so_subset.groupby(['Material', 'Batch Number'])['Ordered Quantity'].sum().reset_index()
                     so_grouped.rename(columns={'Batch Number': 'Batch', 'Ordered Quantity': 'Qty_SO'}, inplace=True)
                     
-                    final_view = pd.merge(loct_grouped, so_grouped, on=['Material', 'Batch'], how='left')
+                    final_view = pd.merge(loct_grouped, so_grouped, on=['Material', 'Batch'], how='outer')
+                    final_view['Stock_Gudang'] = final_view['Stock_Gudang'].fillna(0)
                     final_view['Qty_SO'] = final_view['Qty_SO'].fillna(0)
                     final_view['Sisa_Stock'] = final_view['Stock_Gudang'] - final_view['Qty_SO']
                     
