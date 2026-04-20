@@ -63,6 +63,22 @@ def highlight_status(val):
         return 'background-color: #ffe6cc'
     return ''
 
+def highlight_kecukupan(val):
+    if val == '✅ CUKUP':
+        return 'background-color: #ccffcc'
+    elif val == '⚠️ KURANG':
+        return 'background-color: #ffffcc'
+    elif val == '❌ TIDAK ADA STOCK':
+        return 'background-color: #ffcccc'
+    return ''
+
+def highlight_total_status(val):
+    if val == '✅ TOTAL STOCK CUKUP':
+        return 'background-color: #ccffcc'
+    elif val == '⚠️ TOTAL STOCK KURANG':
+        return 'background-color: #ffffcc'
+    return ''
+
 # --- MAIN APP ---
 st.sidebar.header("Upload File")
 uploaded_file = st.sidebar.file_uploader("Upload File Excel (.xlsx)", type=['xlsx'])
@@ -373,11 +389,9 @@ if uploaded_file:
                         if list_saran:
                             df_saran = pd.concat(list_saran, ignore_index=True)
                             
-                            # Tampilkan tabel saran
-                            styled_saran = df_saran.style.applymap(
-                                lambda x: 'background-color: #ccffcc' if x == '✅ CUKUP' 
-                                else ('background-color: #ffffcc' if x == '⚠️ KURANG' 
-                                      else ('background-color: #ffcccc' if x == '❌ TIDAK ADA STOCK' else '')),
+                            # Tampilkan tabel saran - GUNAKAN .map() BUKAN .applymap()
+                            styled_saran = df_saran.style.map(
+                                highlight_kecukupan,
                                 subset=['Status_Kecukupan']
                             ).format({
                                 "Stock_Available": "{:,.0f}",
@@ -408,9 +422,8 @@ if uploaded_file:
                                     else '⚠️ TOTAL STOCK KURANG', axis=1
                                 )
                                 
-                                styled_summary = summary_so.style.applymap(
-                                    lambda x: 'background-color: #ccffcc' if x == '✅ TOTAL STOCK CUKUP' 
-                                    else 'background-color: #ffffcc',
+                                styled_summary = summary_so.style.map(
+                                    highlight_total_status,
                                     subset=['Status']
                                 ).format({
                                     "Qty_Dibutuhkan": "{:,.0f}",
