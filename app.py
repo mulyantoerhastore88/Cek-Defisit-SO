@@ -157,8 +157,8 @@ if uploaded_file:
                     with st.expander("📊 Lihat Preview Opsi Substitusi (Semua Batch Material Terkait)"):
                         st.caption("Tabel ini menampilkan semua batch dari material yang defisit. Gunakan untuk membandingkan batch defisit dengan batch surplus.")
                         
-                        # Gunakan .map() untuk Styler (bukan .applymap())
-                        styled_df = substitusi_df.style.applymap(
+                        # GUNAKAN .map() BUKAN .applymap()
+                        styled_df = substitusi_df.style.map(
                             highlight_status, 
                             subset=['Status']
                         ).format({
